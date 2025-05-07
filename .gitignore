@@ -1,0 +1,16 @@
+__pycache__/*
+*/__pycache__/*
+.ipynb_checkpoints/*
+*/.vscode/*
+*/.idea/*
+*/.pytest
+*.pyc
+logs/
+checkpoints/
+preprocessed_data/
+wins_draw_pic/
+draw_pic/
+visualization/
+
+
+
