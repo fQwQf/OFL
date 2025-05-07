@@ -31,7 +31,7 @@ All configurations are in the folder of `configs'
   author = {Hui, Zeng and Wenke, Huang and Tongqing, Zhou and Xinyi, Wu and Guancheng, Wan and Yingwen, Chen and Zhiping, Cai},
   title = {Does one-shot give the best shot? Mitigating Model Inconsistency in One-shot Federated Learning},
   year = {2025},
-  booktitle = {Proceedings of International Conference of Machine Learning (ICML)},
+  booktitle = {Proceedings of International Conference on Machine Learning (ICML)},
   numpages = {9},
 }
 ```
