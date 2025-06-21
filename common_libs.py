@@ -9,7 +9,7 @@ import random
 import copy
 from visdom import Visdom
 import csv
-from torch.optim import Optimizer
+from torch.optim.optimizer import Optimizer
 import torchvision
 from tqdm import tqdm, trange
 import math
