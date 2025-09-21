@@ -80,6 +80,5 @@ resume: True
 resume_best: False
 seed: 1
 
-ours:
-  use_memory_bank: True
-  memory_bank_size: 4096
+use_memory_bank: True
+memory_bank_size: 4096

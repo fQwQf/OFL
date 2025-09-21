@@ -200,8 +200,8 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device):
 
     noise_samples = torch.randn_like(vis_data)
 
-    use_memory_bank = config['ours'].get('use_memory_bank', False)
-    memory_bank_size = config['ours'].get('memory_bank_size', 4096)
+    use_memory_bank = config.get('use_memory_bank', False)
+    memory_bank_size = config.get('memory_bank_size', 4096)
 
     # sample_per_class
     clients_sample_per_class = []
