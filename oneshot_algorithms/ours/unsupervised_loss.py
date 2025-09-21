@@ -10,7 +10,7 @@ class SupConLoss(torch.nn.Module):
         self.contrast_mode = contrast_mode
         self.base_temperature = base_temperature
 
-    def forward(self, features, labels=None, mask=None):
+    def forward(self, features, labels=None, mask=None, negative_keys=None):
         """Compute loss for model. If both `labels` and `mask` are None,
         it degenerates to SimCLR unsupervised loss:
         https://arxiv.org/pdf/2002.05709.pdf
@@ -55,16 +55,32 @@ class SupConLoss(torch.nn.Module):
         else:
             raise ValueError('Unknown mode: {}'.format(self.contrast_mode))
 
-        # compute logits
+        # 如果提供了来自 memory bank 的负样本，将它们拼接到 contrast_feature 中
+        if negative_keys is not None:
+            full_contrast_feature = torch.cat([contrast_feature, negative_keys], dim=0)
+        else:
+            full_contrast_feature = contrast_feature
+
+        # compute logits using the full set of contrastive features
         anchor_dot_contrast = torch.div(
-            torch.matmul(anchor_feature, contrast_feature.T),
+            torch.matmul(anchor_feature, full_contrast_feature.T),
             self.temperature)
+        
         # for numerical stability
         logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
         logits = anchor_dot_contrast - logits_max.detach()
 
         # tile mask
         mask = mask.repeat(anchor_count, contrast_count)
+
+        # 如果使用了 memory bank，需要扩展 mask 以匹配 full_contrast_feature 的维度
+        # 来自 memory bank 的样本永远不应被视为正样本
+        if negative_keys is not None:
+            # 创建一个全零的 mask 用于 memory bank 的 key
+            mem_bank_mask = torch.zeros(mask.shape[0], negative_keys.shape[0], device=device)
+            # 拼接 mask
+            mask = torch.cat([mask, mem_bank_mask], dim=1)
+
         # mask-out self-contrast cases
         logits_mask = torch.scatter(
             torch.ones_like(mask),
