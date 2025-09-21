@@ -3,7 +3,7 @@ from oneshot_algorithms.ours.unsupervised_loss import SupConLoss, Contrastive_pr
 
 from common_libs import *
 
-def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, save_freq=1):
+def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, save_freq=1,use_memory_bank=False, memory_bank_size=4096):
     model.train()
     model.to(device)
 
