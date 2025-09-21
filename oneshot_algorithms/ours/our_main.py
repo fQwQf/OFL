@@ -200,6 +200,8 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device):
 
     noise_samples = torch.randn_like(vis_data)
 
+    use_memory_bank = config['ours'].get('use_memory_bank', False)
+    memory_bank_size = config['ours'].get('memory_bank_size', 4096)
 
     # sample_per_class
     clients_sample_per_class = []
@@ -236,6 +238,8 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device):
                 aug_transformer=aug_transformer,
                 client_model_dir=local_model_dir + f"/client_{c}",
                 save_freq=config['checkpoint']['save_freq'],
+                use_memory_bank=use_memory_bank,
+                memory_bank_size=memory_bank_size
             )
             
             local_models[c] = local_model_c
