@@ -6,6 +6,8 @@ from common_libs import *
 
 from oneshot_algorithms.ours.our_local_training import ours_local_training
 
+import torch.nn.functional as F
+
 def get_supcon_transform(dataset_name):
     if dataset_name == 'CIFAR10' or dataset_name == 'CIFAR100' or dataset_name == 'SVHN':
         return torchvision.transforms.Compose([
@@ -189,17 +191,63 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device):
     
     aug_transformer = get_supcon_transform(config['dataset']['data_name'])
 
-    # visualization
 
-    supervised_transformer = get_supervised_transform(config['dataset']['data_name'])
-    vis_loader = torch.utils.data.DataLoader(copy.deepcopy(test_loader.dataset), config['visualization']['vis_size'], shuffle=False)
-    vis_iter = iter(vis_loader)
-    vis_data, vis_label = next(vis_iter)
-    vis_data = supervised_transformer(vis_data)
-    vis_folder = config['visualization']['save_path'] +"/ours/"
+    public_feature_bank = None
+    # Check if the feature bank strategy is enabled in the config
+    if config.get('ours_v5_params', {}).get('use_public_feature_bank', False):
+        logger.info("Public feature bank strategy is ENABLED.")
+        
+        # We need the public dataset, which should have been split off earlier.
+        # This requires modifying the main test.py script. Let's assume it's passed in.
+        # For now, we will add the logic to generate it from a placeholder.
+        # The correct way is to modify test.py to call the modified get_fl_dataset.
+        
+        # We need the public_trainset from the modified get_fl_dataset
+        _, _, _, public_trainset = get_fl_dataset(
+            config["dataset"]["data_name"],
+            config["dataset"]["root_path"],
+            config['client']['num_clients'],
+            config['distribution']['type'],
+            config['distribution']['label_num_per_client'],
+            config['distribution']['alpha'],
+            public_ratio=config['ours_v5_params']['public_data_ratio']
+        )
+        
+        if public_trainset and len(public_trainset) > 0:
+            logger.info("Generating public feature bank from public dataset...")
+            
+            # Use a fresh model instance for feature extraction to avoid data leakage
+            bank_model = get_train_models(
+                model_name=config['server']['model_name'],
+                num_classes=config['dataset']['num_classes'],
+                mode='our'
+            ).to(device)
+            bank_model.eval()
 
-    noise_samples = torch.randn_like(vis_data)
+            public_loader = torch.utils.data.DataLoader(public_trainset, batch_size=config['dataset']['test_batch_size'], shuffle=False)
+            
+            all_features = []
+            with torch.no_grad():
+                for data, _ in public_loader:
+                    data = data.to(device)
+                    features = bank_model.encoder(data).detach()
+                    all_features.append(features)
+            
+            public_feature_bank = torch.cat(all_features, dim=0)
+            
+            # Normalize features and optionally truncate to a max size
+            public_feature_bank = F.normalize(public_feature_bank, dim=1)
+            
+            bank_size = config['ours_v5_params'].get('feature_bank_size', 4096)
+            if len(public_feature_bank) > bank_size:
+                perm = torch.randperm(len(public_feature_bank))
+                public_feature_bank = public_feature_bank[perm[:bank_size]]
 
+            logger.info(f"Public feature bank created with size: {public_feature_bank.shape}")
+        else:
+            logger.warning("Public feature bank enabled, but no public data was provided.")
+    else:
+        logger.info("Public feature bank strategy is DISABLED.")
 
     # sample_per_class
     clients_sample_per_class = []
@@ -235,6 +283,7 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device):
                 sample_per_class=clients_sample_per_class[c],
                 aug_transformer=aug_transformer,
                 client_model_dir=local_model_dir + f"/client_{c}",
+                public_feature_bank=public_feature_bank, 
                 save_freq=config['checkpoint']['save_freq'],
             )
             

@@ -10,7 +10,7 @@ class SupConLoss(torch.nn.Module):
         self.contrast_mode = contrast_mode
         self.base_temperature = base_temperature
 
-    def forward(self, features, labels=None, mask=None):
+    def forward(self, features, labels=None, mask=None, external_negatives=None):
         """Compute loss for model. If both `labels` and `mask` are None,
         it degenerates to SimCLR unsupervised loss:
         https://arxiv.org/pdf/2002.05709.pdf
@@ -46,6 +46,12 @@ class SupConLoss(torch.nn.Module):
 
         contrast_count = features.shape[1]
         contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
+
+        if external_negatives is not None:
+            full_contrast_feature = torch.cat([contrast_feature, external_negatives], dim=0)
+        else:
+            full_contrast_feature = contrast_feature
+
         if self.contrast_mode == 'one':
             anchor_feature = features[:, 0]
             anchor_count = 1
@@ -65,6 +71,14 @@ class SupConLoss(torch.nn.Module):
 
         # tile mask
         mask = mask.repeat(anchor_count, contrast_count)
+
+        if external_negatives is not None:
+            num_negatives = external_negatives.shape[0]
+            mask = torch.cat(
+                [mask, torch.zeros(mask.shape[0], num_negatives).to(device)], 
+                dim=1
+            )
+
         # mask-out self-contrast cases
         logits_mask = torch.scatter(
             torch.ones_like(mask),

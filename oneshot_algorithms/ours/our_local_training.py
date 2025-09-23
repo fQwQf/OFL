@@ -3,7 +3,7 @@ from oneshot_algorithms.ours.unsupervised_loss import SupConLoss, Contrastive_pr
 
 from common_libs import *
 
-def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, save_freq=1):
+def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, public_feature_bank=None, save_freq=1):
     model.train()
     model.to(device)
 
@@ -35,7 +35,12 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
             # contrastive loss
             f1, f2 = torch.split(feature_norm, [bsz, bsz], dim=0)
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
-            contrastive_loss = contrastive_loss_fn(features, target)
+
+            contrastive_loss = contrastive_loss_fn(
+                features, 
+                target, 
+                external_negatives=public_feature_bank
+            )
 
             # prototype <--> feature contrastive loss
             pro_feat_con_loss = con_proto_feat_loss_fn(feature_norm, model.learnable_proto, aug_labels)
@@ -43,7 +48,6 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
             # prototype self constrastive 
             pro_con_loss = con_proto_loss_fn(model.learnable_proto)
 
-            
             loss = cls_loss + contrastive_loss + pro_con_loss + pro_feat_con_loss
 
             loss.backward()

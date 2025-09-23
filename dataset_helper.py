@@ -3,7 +3,7 @@ import torchvision.transforms as transforms
 from pathlib import Path
 from itertools import combinations
 from collections import defaultdict
-
+from torch.utils.data import Subset 
 
 from common_libs import *
 
@@ -214,13 +214,55 @@ def dirichlet(data_idxs_dict, num_users, alpha):
         # print(image_nums)
     return client_idx_map
 
+def split_dataset_for_public_pool(train_dataset, public_ratio=0.1):
+    """
+    Splits a training dataset into a private part for clients and a public part for the server.
 
-def get_fl_dataset(dataset_name, dataset_path, num_users, distribution, distribution_params=2, alpha=0.1):
-    train_set, test_set = load_dataset(dataset_name, dataset_path)
-    data_idx_dict = build_dataset_idxs(train_set, dataset_name)
+    Args:
+        train_dataset (torch.utils.data.Dataset): The original training dataset.
+        public_ratio (float): The proportion of the dataset to be used as public data.
+
+    Returns:
+        tuple: (private_dataset, public_dataset)
+    """
+    if not (0 < public_ratio < 1):
+        raise ValueError("public_ratio must be between 0 and 1.")
+
+    dataset_size = len(train_dataset)
+    public_size = int(public_ratio * dataset_size)
+    private_size = dataset_size - public_size
+
+    indices = list(range(dataset_size))
+    np.random.shuffle(indices)
+
+    public_indices = indices[:public_size]
+    private_indices = indices[public_size:]
+
+    private_subset = Subset(train_dataset, private_indices)
+    public_subset = Subset(train_dataset, public_indices)
+    
+    logger.info(f"Dataset split: {private_size} samples for private clients, {public_size} for public pool.")
+
+    return private_subset, public_subset
+
+def get_fl_dataset(dataset_name, dataset_path, num_users, distribution, distribution_params=2, alpha=0.1, public_ratio=0.0):
+    """
+    Modified get_fl_dataset to potentially split off a public dataset.
+    """
+    full_train_set, test_set = load_dataset(dataset_name, dataset_path)
+    
+    public_set = None
+    if public_ratio > 0:
+        private_train_set, public_set = split_dataset_for_public_pool(full_train_set, public_ratio)
+    else:
+        private_train_set = full_train_set
+
+    data_idx_dict = build_dataset_idxs(private_train_set, f"{dataset_name}_private") # Use a different name to avoid cache conflicts
 
     if distribution == 'iid':
-        client_idx_map = iid(len(train_set), num_users)
+        # Important: indices must be relative to the subset, not the original dataset.
+        # But since we rebuild data_idx_dict from the subset, the indices are already correct.
+        client_idx_map = iid(len(private_train_set), num_users)
     elif distribution == 'noniid':
         client_idx_map = non_iid(data_idx_dict, num_users, distribution_params)
     elif distribution == 'dirichlet':
@@ -228,7 +270,7 @@ def get_fl_dataset(dataset_name, dataset_path, num_users, distribution, distribu
     else:
         raise NotImplementedError
     
-    return train_set, test_set, client_idx_map
+    return private_train_set, test_set, client_idx_map, public_set
 
 
 def get_client_dataloader(client_idxs, trainset, batch_size):

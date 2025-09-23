@@ -15,6 +15,10 @@ logger.info(f"config: {config}")
 
 setup_seed(config['seed'])
 
+public_ratio = 0.0
+if config.get('ours_v5_params', {}).get('use_public_feature_bank', False):
+    public_ratio = config['ours_v5_params'].get('public_data_ratio', 0.1)
+
 
 trainset, testset, client_idx_map = get_fl_dataset(
     config["dataset"]["data_name"], 
@@ -22,7 +26,9 @@ trainset, testset, client_idx_map = get_fl_dataset(
     config['client']['num_clients'], 
     config['distribution']['type'], 
     config['distribution']['label_num_per_client'], 
-    config['distribution']['alpha'])
+    config['distribution']['alpha'],
+    public_ratio=public_ratio
+)
 
 test_loader = torch.utils.data.DataLoader(testset, batch_size=config['dataset']['test_batch_size'], shuffle=True)
 
@@ -59,6 +65,13 @@ elif config_args.algo == 'FedETF':
 #     FedBCD3(trainset, test_loader, client_idx_map, config, global_model, device)
 elif config_args.algo == 'OursV4':
     OneshotOurs(trainset, test_loader, client_idx_map, config, device)
+    config['ours_v5_params'] = {'use_public_feature_bank': False}
+elif config_args.algo == 'OursV5': 
+    if 'ours_v5_params' not in config:
+        config['ours_v5_params'] = {}
+    config['ours_v5_params']['use_public_feature_bank'] = True
+    OneshotOurs(trainset, test_loader, client_idx_map, config, device)
+
 
 else:
     raise NotImplementedError(f"Algorithm {config_args.algo} is not implemented.")   
