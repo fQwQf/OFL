@@ -63,7 +63,7 @@ class SupConLoss(torch.nn.Module):
 
         # compute logits
         anchor_dot_contrast = torch.div(
-            torch.matmul(anchor_feature, contrast_feature.T),
+            torch.matmul(anchor_feature, full_contrast_feature.T),
             self.temperature)
         # for numerical stability
         logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
