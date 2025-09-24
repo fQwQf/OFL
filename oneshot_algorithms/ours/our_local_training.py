@@ -3,7 +3,7 @@ from oneshot_algorithms.ours.unsupervised_loss import SupConLoss, Contrastive_pr
 
 from common_libs import *
 
-def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, public_feature_bank=None, save_freq=1):
+def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, public_feature_bank=None, save_freq=1, alignment_epochs=0):
     model.train()
     model.to(device)
 
@@ -15,6 +15,14 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
 
     for e in range(start_epoch, start_epoch + local_epochs):
         total_loss = 0
+
+        is_alignment_stage = (e < start_epoch + alignment_epochs) and (public_feature_bank is not None)
+        
+        if is_alignment_stage:
+            logger.info(f"Epoch {e}: Running in Stage 1 - Global Alignment Only.")
+        else:
+            logger.info(f"Epoch {e}: Running in Stage 2 - Local Task Fine-tuning.")
+
         for batch_idx, (data, target) in enumerate(training_data):
             
             
@@ -36,19 +44,30 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
             f1, f2 = torch.split(feature_norm, [bsz, bsz], dim=0)
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
 
-            contrastive_loss = contrastive_loss_fn(
-                features, 
-                target, 
-                external_negatives=public_feature_bank
-            )
+            if is_alignment_stage:
+                # 阶段一：只计算对比损失，强制模型对齐到全局特征库
+                contrastive_loss = contrastive_loss_fn(
+                    features, 
+                    target, 
+                    external_negatives=public_feature_bank
+                )
+                loss = contrastive_loss
+            else:
+                # 阶段二：使用原始的FAFI复合损失进行本地任务微调
+                cls_loss = cls_loss_fn(logits, aug_labels)
+                
+                # 在微调阶段，可以让对比损失继续起作用（作为正则项），
+                # 或者完全关闭它。这里我们保持开启，但它的影响会因cls_loss的存在而被平衡。
+                contrastive_loss = contrastive_loss_fn(
+                    features, 
+                    target, 
+                    external_negatives=public_feature_bank
+                )
+                
+                pro_feat_con_loss = con_proto_feat_loss_fn(feature_norm, model.learnable_proto, aug_labels)
+                pro_con_loss = con_proto_loss_fn(model.learnable_proto)
 
-            # prototype <--> feature contrastive loss
-            pro_feat_con_loss = con_proto_feat_loss_fn(feature_norm, model.learnable_proto, aug_labels)
-            
-            # prototype self constrastive 
-            pro_con_loss = con_proto_loss_fn(model.learnable_proto)
-
-            loss = cls_loss + contrastive_loss + pro_con_loss + pro_feat_con_loss
+                loss = cls_loss + contrastive_loss + pro_con_loss + pro_feat_con_loss
 
             loss.backward()
 

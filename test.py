@@ -17,11 +17,11 @@ setup_seed(config['seed'])
 
 public_ratio = 0.0
 # 根据配置决定是否启用公共池以及公共数据的比例
-if config_args.algo == 'OursV5':
-    if 'ours_v5_params' not in config:
-        config['ours_v5_params'] = {}
-    config['ours_v5_params']['use_public_feature_bank'] = True
-    public_ratio = config['ours_v5_params'].get('public_data_ratio', 0.1)
+if config_args.algo in ['OursV5', 'OursV6']:
+    params_key = f"{config_args.algo.lower()}_params" 
+    if params_key not in config: config[params_key] = {}
+    config[params_key]['use_public_feature_bank'] = True
+    public_ratio = config[params_key].get('public_data_ratio', 0.1)
 
 # get_fl_dataset 现在返回4个值: 私有训练集, 测试集, 客户端索引图, 公共数据集
 # trainset 现在是私有部分, public_set 是公共部分
@@ -52,6 +52,10 @@ global_model = get_train_models(
 
 device = config['device']
 
+alignment_epochs = 0
+if config_args.algo == 'OursV6':
+    alignment_epochs = config.get('ours_v6_params', {}).get('alignment_epochs', 0)
+
 if config_args.algo == 'FedAvg':
     OneshotFedAvg(trainset, test_loader, client_idx_map, config, device)
 elif config_args.algo == 'Ensemble':
@@ -68,11 +72,17 @@ elif config_args.algo == 'FedETF':
 #     FedBCD2(trainset, test_loader, client_idx_map, config, global_model, device)
 # elif config_args.algo == 'OursV3':
 #     FedBCD3(trainset, test_loader, client_idx_map, config, global_model, device)
-elif config_args.algo == 'OursV4':
-    OneshotOurs(trainset, test_loader, client_idx_map, config, device, public_set=None)
-elif config_args.algo == 'OursV5': 
-    OneshotOurs(trainset, test_loader, client_idx_map, config, device, public_set=public_set)
-
+elif config_args.algo in ['OursV4', 'OursV5', 'OursV6']:
+    current_public_set = public_set if config_args.algo in ['OursV5', 'OursV6'] else None
+    OneshotOurs(
+        trainset=trainset, 
+        test_loader=test_loader, 
+        client_idx_map=client_idx_map, 
+        config=config, 
+        device=device, 
+        public_set=current_public_set, 
+        alignment_epochs=alignment_epochs
+    )
 
 else:
     raise NotImplementedError(f"Algorithm {config_args.algo} is not implemented.")   

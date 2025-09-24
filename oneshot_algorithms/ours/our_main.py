@@ -163,7 +163,7 @@ def eval_with_proto(model, test_loader, device, proto):
 
 
 
-def OneshotOurs(trainset, test_loader, client_idx_map, config, device, public_set=None):
+def OneshotOurs(trainset, test_loader, client_idx_map, config, device, public_set=None,alignment_epochs=0):
 
     logger.info('OneshotOurs')
     # get the global model
@@ -255,6 +255,9 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device, public_se
     else:
         logger.info("Public feature bank strategy is DISABLED.")
 
+    if alignment_epochs > 0:
+        logger.info(f"Two-stage training enabled: Alignment epochs set to {alignment_epochs}.")
+    
     # sample_per_class
     clients_sample_per_class = []
 
@@ -291,6 +294,7 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device, public_se
                 client_model_dir=local_model_dir + f"/client_{c}",
                 public_feature_bank=public_feature_bank, 
                 save_freq=config['checkpoint']['save_freq'],
+                alignment_epochs=alignment_epochs
             )
             
             local_models[c] = local_model_c
