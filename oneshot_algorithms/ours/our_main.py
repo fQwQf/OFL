@@ -8,6 +8,9 @@ from oneshot_algorithms.ours.our_local_training import ours_local_training
 
 import torch.nn.functional as F
 
+from torch.optim import SGD
+from torch.nn import CrossEntropyLoss
+
 def get_supcon_transform(dataset_name):
     if dataset_name == 'CIFAR10' or dataset_name == 'CIFAR100' or dataset_name == 'SVHN':
         return torchvision.transforms.Compose([
@@ -197,23 +200,47 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device, public_se
     # 检查是否应该使用公共特征库 (通过传入的 public_set 是否有效来判断)
     if public_set and len(public_set) > 0 and config.get('ours_v5_params', {}).get('use_public_feature_bank', False):
         logger.info("Public feature bank strategy is ENABLED.")
-        logger.info("Generating public feature bank from the provided public dataset...")
-        
-        # 使用一个干净的模型实例来提取特征
-        bank_model = get_train_models(
+
+        # 1. 初始化一个与客户端结构相同的教师模型
+        logger.info("Initializing teacher model for pre-training on public data.")
+        teacher_model = get_train_models(
             model_name=config['server']['model_name'],
             num_classes=config['dataset']['num_classes'],
             mode='our'
         ).to(device)
-        bank_model.eval()
-
-        public_loader = torch.utils.data.DataLoader(public_set, batch_size=config['dataset']['test_batch_size'], shuffle=False)
         
+        # 2. 在公共数据集上训练这个教师模型
+        public_loader = torch.utils.data.DataLoader(public_set, batch_size=config['dataset']['train_batch_size'], shuffle=True)
+        optimizer = SGD(teacher_model.parameters(), lr=config['server']['lr'], momentum=config['server']['momentum'])
+        criterion = CrossEntropyLoss()
+        
+        num_teacher_epochs = config['ours_v5_params'].get('teacher_pretrain_epochs', 20)
+        logger.info(f"Starting teacher model pre-training for {num_teacher_epochs} epochs...")
+        
+        teacher_model.train()
+        for epoch in range(num_teacher_epochs):
+            epoch_loss = 0
+            for data, target in public_loader:
+                data, target = data.to(device), target.to(device)
+                optimizer.zero_grad()
+                logits, _ = teacher_model(data)
+                loss = criterion(logits, target)
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+            logger.info(f"Teacher pre-train epoch {epoch+1}/{num_teacher_epochs}, Loss: {epoch_loss/len(public_loader):.4f}")
+
+        # 3. 使用训练好的教师模型来生成特征库
+        logger.info("Teacher pre-training finished. Generating public feature bank...")
+        teacher_model.eval()
+        
+        # 使用不带shuffle的loader来遍历整个公共数据集
+        public_loader_no_shuffle = torch.utils.data.DataLoader(public_set, batch_size=config['dataset']['test_batch_size'], shuffle=False)
         all_features = []
         with torch.no_grad():
-            for data, _ in public_loader:
+            for data, _ in public_loader_no_shuffle:
                 data = data.to(device)
-                features = bank_model.encoder(data).detach()
+                features = teacher_model.encoder(data).detach()
                 all_features.append(features)
         
         public_feature_bank = torch.cat(all_features, dim=0)

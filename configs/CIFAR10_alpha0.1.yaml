@@ -83,4 +83,5 @@ seed: 1
 ours_v5_params:
   use_public_feature_bank: true 
   public_data_ratio: 0.1        
-  feature_bank_size: 4096  
+  feature_bank_size: 4096 
+  teacher_pretrain_epochs: 20 
