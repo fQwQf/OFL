@@ -277,3 +277,100 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device):
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
 
 
+# 新增 OneshotOursV5 (DRCL 版本)
+def OneshotOursV5(trainset, test_loader, client_idx_map, config, device):
+    logger.info('OneshotOursV5 with Decoupled Representation and Classifier Learning (DRCL)')
+    # get the global model
+    global_model = get_train_models(
+        model_name=config['server']['model_name'],
+        num_classes=config['dataset']['num_classes'],
+        mode='our'
+    )
+
+    global_model.to(device)
+    global_model.train()
+
+    # --- 新增逻辑：创建固定的全局原型锚点 ---
+    # 获取原型维度
+    proto_shape = global_model.learnable_proto.shape
+    # 随机初始化，设置 requires_grad=False 使其不可学习
+    fixed_anchors = torch.randn(proto_shape, device=device, requires_grad=False)
+    # 归一化以保证稳定性
+    fixed_anchors = torch.nn.functional.normalize(fixed_anchors, dim=1)
+    logger.info(f"Initialized fixed anchors with shape: {fixed_anchors.shape}")
+    # ----------------------------------------
+
+    method_results = defaultdict(list)
+    save_path, local_model_dir = prepare_checkpoint_dir(config)
+    if not os.path.exists(save_path + "/config.yaml"):
+        save_yaml_config(save_path + "/config.yaml", config) 
+
+    local_models = [copy.deepcopy(global_model) for _ in range(config['client']['num_clients'])]
+    
+    local_data_size = [len(client_idx_map[c]) for c in range(config['client']['num_clients'])]
+    if config['server']['aggregated_by_datasize']:
+        weights = [i/sum(local_data_size) for i in local_data_size]
+    else:
+        weights = [1/config['client']['num_clients'] for _ in range(config['client']['num_clients'])]        
+    
+    aug_transformer = get_supcon_transform(config['dataset']['data_name'])
+
+    clients_sample_per_class = []
+
+    for cr in trange(config['server']['num_rounds']):
+        logger.info(f"Round {cr} starts--------|")
+        
+        local_protos = []
+        
+        for c in range(config['client']['num_clients']):
+            logger.info(f"Client {c} Starts Local Trainning--------|")
+            client_dataloader = get_client_dataloader(client_idx_map[c], trainset, config['dataset']['train_batch_size'])
+
+            if cr == 0:
+                clients_sample_per_class.append(generate_sample_per_class(config['dataset']['num_classes'], client_dataloader, len(client_idx_map[c])))
+                logger.info('generating sample per sample')
+
+            # --- 修改本地训练调用 ---
+            local_model_c = ours_local_training(
+                model=copy.deepcopy(local_models[c]),
+                training_data=client_dataloader,
+                test_dataloader=test_loader,
+                start_epoch=cr * config['server']['local_epochs'],
+                local_epochs=config['server']['local_epochs'],
+                optim_name=config['server']['optimizer'],
+                lr=config['server']['lr'],
+                momentum=config['server']['momentum'],
+                loss_name=config['server']['loss_name'],
+                device=device,
+                num_classes=config['dataset']['num_classes'],
+                sample_per_class=clients_sample_per_class[c],
+                aug_transformer=aug_transformer,
+                client_model_dir=local_model_dir + f"/client_{c}",
+                save_freq=config['checkpoint']['save_freq'],
+                # 传入新参数以启用DRCL
+                use_drcl=True,
+                fixed_anchors=fixed_anchors,
+                lambda_align=config.get('lambda_align', 1.0) # 从config获取超参，默认1.0
+            )
+            # --------------------------
+            
+            local_models[c] = local_model_c
+            logger.info(f"Client {c} Finish Local Training--------|")
+
+            local_proto_c = local_model_c.get_proto().detach()
+            local_protos.append(local_proto_c)
+            logger.info(f"Client {c} Collecting Local Prototypes--------|")
+
+        logger.info(f"Round {cr} Finish--------|")
+        model_var_m, model_var_s = compute_local_model_variance(local_models)
+        logger.info(f"Model variance: mean: {model_var_m}, sum: {model_var_s}")
+
+        global_proto = aggregate_local_protos(local_protos)
+        
+        method_name = 'OneShotOursV5+Ensemble'
+        ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+        ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
+        logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
+        method_results[method_name].append(ens_proto_acc)
+
+        save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)

@@ -3,7 +3,7 @@ from oneshot_algorithms.ours.unsupervised_loss import SupConLoss, Contrastive_pr
 
 from common_libs import *
 
-def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, save_freq=1):
+def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, save_freq=1, use_drcl=False, fixed_anchors=None, lambda_align=1.0):
     model.train()
     model.to(device)
 
@@ -12,6 +12,10 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
     contrastive_loss_fn = SupConLoss(temperature=0.07)
     con_proto_feat_loss_fn = Contrastive_proto_feature_loss(temperature=1.0)
     con_proto_loss_fn = Contrastive_proto_loss(temperature=1.0)
+
+    # 如果使用DRCL，定义对齐损失函数
+    if use_drcl:
+        alignment_loss_fn = torch.nn.MSELoss()
 
     for e in range(start_epoch, start_epoch + local_epochs):
         total_loss = 0
@@ -43,8 +47,16 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
             # prototype self constrastive 
             pro_con_loss = con_proto_loss_fn(model.learnable_proto)
 
-            
-            loss = cls_loss + contrastive_loss + pro_con_loss + pro_feat_con_loss
+            # 计算基础损失，并根据开关决定是否加入对齐损失
+            base_loss = cls_loss + contrastive_loss + pro_con_loss + pro_feat_con_loss
+
+            if use_drcl and fixed_anchors is not None:
+                # 计算可学习原型与固定锚点之间的对齐损失
+                align_loss = alignment_loss_fn(model.learnable_proto, fixed_anchors)
+                loss = base_loss + lambda_align * align_loss
+            else:
+                loss = base_loss
+
 
             loss.backward()
 
