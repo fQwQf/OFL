@@ -17,6 +17,8 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
     if use_drcl:
         alignment_loss_fn = torch.nn.MSELoss()
 
+    initial_lambda = lambda_align
+
     for e in range(start_epoch, start_epoch + local_epochs):
         total_loss = 0
         for batch_idx, (data, target) in enumerate(training_data):
@@ -51,9 +53,13 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
             base_loss = cls_loss + contrastive_loss + pro_con_loss + pro_feat_con_loss
 
             if use_drcl and fixed_anchors is not None:
+                # 线性衰减：从 initial_lambda 降至 0
+                progress = (e - start_epoch) / local_epochs
+                lambda_annealed = initial_lambda * (1 - progress)
+
                 # 计算可学习原型与固定锚点之间的对齐损失
                 align_loss = alignment_loss_fn(model.learnable_proto, fixed_anchors)
-                loss = base_loss + lambda_align * align_loss
+                loss = base_loss + lambda_annealed * align_loss
             else:
                 loss = base_loss
 
