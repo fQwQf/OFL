@@ -31,6 +31,51 @@ def get_supcon_transform(dataset_name):
         ])
 
 
+def generate_etf_anchors(num_classes, feature_dim, device):
+    """
+    Generate Equiangular Tight Frame (ETF) anchors based on Neural Collapse theory.
+    This creates a set of maximally separated and geometrically optimal prototype targets.
+    """
+    # 确保特征维度至少不小于类别数，这是构建ETF的常见要求
+    if feature_dim < num_classes:
+        # 如果维度不够，我们可以退回到正交基，这是一个很好的次优选择
+        logger.warning(f"Feature dim ({feature_dim}) is less than num_classes ({num_classes}). Falling back to orthogonal anchors.")
+        H = torch.randn(feature_dim, num_classes)
+        Q, _ = torch.qr(H)
+        return Q.T.to(device)
+
+    # 1. 构造ETF的格拉姆矩阵 M = I - (1/C) * J
+    I = torch.eye(num_classes)
+    J = torch.ones(num_classes, num_classes)
+    M = I - (1 / num_classes) * J
+
+    # 2. 通过Cholesky分解找到 M_sqrt
+    # M 是半正定的，可能需要添加一个小的epsilon以保证数值稳定性
+    try:
+        L = torch.linalg.cholesky(M + 1e-6 * I)
+    except torch.linalg.LinAlgError:
+        # 如果Cholesky分解失败，使用特征值分解
+        eigvals, eigvecs = torch.linalg.eigh(M)
+        eigvals[eigvals < 0] = 0 # 消除数值误差导致的负特征值
+        L = eigvecs @ torch.diag(torch.sqrt(eigvals))
+
+    # 3. 生成一个随机正交矩阵的“基底”
+    H_ortho = torch.randn(feature_dim, num_classes)
+    Q, _ = torch.linalg.qr(H_ortho) # Q的列是正交的
+
+    # 4. 将基底与 M_sqrt 相乘，生成最终的ETF矩阵
+    # W 的列向量构成了ETF
+    W = Q @ L.T
+    
+    # 我们需要的是 (num_classes, feature_dim) 的原型，所以返回转置
+    etf_anchors = W.T.to(device)
+    
+    # 最终归一化，确保所有锚点都是单位向量
+    etf_anchors = torch.nn.functional.normalize(etf_anchors, dim=1)
+    
+    return etf_anchors
+
+
 def agg_protos(protos):
     for [label, proto_list] in protos.items():
         if len(proto_list) > 1:
@@ -375,6 +420,7 @@ def OneshotOursV5(trainset, test_loader, client_idx_map, config, device):
 
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
 
+# OneshotOursV6 (Lambda Annealing)
 def OneshotOursV6(trainset, test_loader, client_idx_map, config, device):
     logger.info('OneshotOursV6 with DRCL and Lambda Annealing')
     # get the global model
@@ -465,3 +511,94 @@ def OneshotOursV6(trainset, test_loader, client_idx_map, config, device):
         method_results[method_name].append(ens_proto_acc)
 
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
+
+# OneshotOursV7 (ETF Anchors + Lambda Annealing)
+def OneshotOursV7(trainset, test_loader, client_idx_map, config, device):
+    logger.info('OneshotOursV7 with DRCL (ETF Anchors) and Lambda Annealing')
+    
+    global_model = get_train_models(
+        model_name=config['server']['model_name'],
+        num_classes=config['dataset']['num_classes'],
+        mode='our'
+    )
+    global_model.to(device)
+    global_model.train()
+
+    # --- 核心修改：使用ETF锚点替换随机锚点 ---
+    feature_dim = global_model.learnable_proto.shape[1]
+    num_classes = config['dataset']['num_classes']
+    fixed_anchors = generate_etf_anchors(num_classes, feature_dim, device)
+    logger.info(f"Initialized ETF fixed anchors with shape: {fixed_anchors.shape}")
+
+    method_results = defaultdict(list)
+    save_path, local_model_dir = prepare_checkpoint_dir(config)
+    if not os.path.exists(save_path + "/config.yaml"):
+        save_yaml_config(save_path + "/config.yaml", config) 
+
+    local_models = [copy.deepcopy(global_model) for _ in range(config['client']['num_clients'])]
+    
+    local_data_size = [len(client_idx_map[c]) for c in range(config['client']['num_clients'])]
+    if config['server']['aggregated_by_datasize']:
+        weights = [i/sum(local_data_size) for i in local_data_size]
+    else:
+        weights = [1/config['client']['num_clients'] for _ in range(config['client']['num_clients'])]        
+    
+    aug_transformer = get_supcon_transform(config['dataset']['data_name'])
+
+    clients_sample_per_class = []
+
+    for cr in trange(config['server']['num_rounds']):
+        logger.info(f"Round {cr} starts--------|")
+        
+        local_protos = []
+        
+        for c in range(config['client']['num_clients']):
+            logger.info(f"Client {c} Starts Local Trainning--------|")
+            client_dataloader = get_client_dataloader(client_idx_map[c], trainset, config['dataset']['train_batch_size'])
+
+            if cr == 0:
+                clients_sample_per_class.append(generate_sample_per_class(config['dataset']['num_classes'], client_dataloader, len(client_idx_map[c])))
+
+            # 调用与V6完全相同的本地训练函数，但传入的是高质量的ETF锚点
+            local_model_c = ours_local_training(
+                model=copy.deepcopy(local_models[c]),
+                training_data=client_dataloader,
+                test_dataloader=test_loader,
+                start_epoch=cr * config['server']['local_epochs'],
+                local_epochs=config['server']['local_epochs'],
+                optim_name=config['server']['optimizer'],
+                lr=config['server']['lr'],
+                momentum=config['server']['momentum'],
+                loss_name=config['server']['loss_name'],
+                device=device,
+                num_classes=config['dataset']['num_classes'],
+                sample_per_class=clients_sample_per_class[c],
+                aug_transformer=aug_transformer,
+                client_model_dir=local_model_dir + f"/client_{c}",
+                save_freq=config['checkpoint']['save_freq'],
+                use_drcl=True,
+                fixed_anchors=fixed_anchors,
+                lambda_align=config.get('lambda_align_initial', 5.0)
+            )
+            
+            local_models[c] = local_model_c
+            logger.info(f"Client {c} Finish Local Training--------|")
+
+            local_proto_c = local_model_c.get_proto().detach()
+            local_protos.append(local_proto_c)
+            logger.info(f"Client {c} Collecting Local Prototypes--------|")
+
+        logger.info(f"Round {cr} Finish--------|")
+        model_var_m, model_var_s = compute_local_model_variance(local_models)
+        logger.info(f"Model variance: mean: {model_var_m}, sum: {model_var_s}")
+
+        global_proto = aggregate_local_protos(local_protos)
+        
+        method_name = 'OneShotOursV7+Ensemble'
+        ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+        ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
+        logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
+        method_results[method_name].append(ens_proto_acc)
+
+        save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
+
