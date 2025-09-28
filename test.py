@@ -67,6 +67,12 @@ elif config_args.algo == 'OursV7':
     OneshotOursV7(trainset, test_loader, client_idx_map, config, device)
 elif config_args.algo == 'OursV8':
     OneshotOursV8(trainset, test_loader, client_idx_map, config, device)
+elif config_args.algo == 'OursV6IFFI':
+    OneshotOursV6(trainset, test_loader, client_idx_map, config, device, use_simple_server=False)
+elif config_args.algo == 'OursV4IFFI':
+    OneshotOurs(trainset, test_loader, client_idx_map, config, device, use_simple_server=False)
+elif config_args.algo == 'OursV7IFFI':
+    OneshotOursV7(trainset, test_loader, client_idx_map, config, device, use_simple_server=False)
 else:
     raise NotImplementedError(f"Algorithm {config_args.algo} is not implemented.")   
 

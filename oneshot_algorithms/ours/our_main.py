@@ -177,7 +177,9 @@ class WEnsembleFeature(torch.nn.Module):
         for model, weight in zip(self.models, self.weight_list):
             feature = weight * model.encoder(x)
             feature_total += feature
-        return feature_total        
+        return feature_total   
+
+     
 
     
 def eval_with_proto(model, test_loader, device, proto):
@@ -203,7 +205,7 @@ def eval_with_proto(model, test_loader, device, proto):
 
 
 
-def OneshotOurs(trainset, test_loader, client_idx_map, config, device):
+def OneshotOurs(trainset, test_loader, client_idx_map, config, device, use_simple_server=True):
     logger.info('OneshotOurs')
     # get the global model
     global_model = get_train_models(
@@ -312,8 +314,15 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device):
 
         global_proto = aggregate_local_protos(local_protos)
         
-        method_name = 'OneShotOurs+Ensemble'
-        ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+        if use_simple_server:
+            method_name = 'OneShotOursV7+SimpleServer'
+            ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+            logger.info("V7 Training | Using SIMPLE server aggregation.")
+        else:
+            method_name = 'OneShotOursV7+AdvancedServer'
+            ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
+            logger.info("V7 Training | Using ADVANCED IFFI server aggregation.")
+
         ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
         logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
         method_results[method_name].append(ens_proto_acc)
@@ -421,7 +430,7 @@ def OneshotOursV5(trainset, test_loader, client_idx_map, config, device):
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
 
 # OneshotOursV6 (Lambda Annealing)
-def OneshotOursV6(trainset, test_loader, client_idx_map, config, device):
+def OneshotOursV6(trainset, test_loader, client_idx_map, config, device, use_simple_server=True):
     logger.info('OneshotOursV6 with DRCL and Lambda Annealing')
     # get the global model
     global_model = get_train_models(
@@ -504,8 +513,15 @@ def OneshotOursV6(trainset, test_loader, client_idx_map, config, device):
 
         global_proto = aggregate_local_protos(local_protos)
         
-        method_name = 'OneShotOursV6+Ensemble'
-        ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+        if use_simple_server:
+            method_name = 'OneShotOursV7+SimpleServer'
+            ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+            logger.info("V7 Training | Using SIMPLE server aggregation.")
+        else:
+            method_name = 'OneShotOursV7+AdvancedServer'
+            ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
+            logger.info("V7 Training | Using ADVANCED IFFI server aggregation.")
+            
         ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
         logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
         method_results[method_name].append(ens_proto_acc)
@@ -513,7 +529,7 @@ def OneshotOursV6(trainset, test_loader, client_idx_map, config, device):
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
 
 # OneshotOursV7 (ETF Anchors + Lambda Annealing)
-def OneshotOursV7(trainset, test_loader, client_idx_map, config, device):
+def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, use_simple_server=True):
     logger.info('OneshotOursV7 with DRCL (ETF Anchors) and Lambda Annealing')
     
     global_model = get_train_models(
@@ -594,8 +610,15 @@ def OneshotOursV7(trainset, test_loader, client_idx_map, config, device):
 
         global_proto = aggregate_local_protos(local_protos)
         
-        method_name = 'OneShotOursV7+Ensemble'
-        ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+        if use_simple_server:
+            method_name = 'OneShotOursV7+SimpleServer'
+            ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+            logger.info("V7 Training | Using SIMPLE server aggregation.")
+        else:
+            method_name = 'OneShotOursV7+AdvancedServer'
+            ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
+            logger.info("V7 Training | Using ADVANCED IFFI server aggregation.")
+            
         ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
         logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
         method_results[method_name].append(ens_proto_acc)
@@ -603,7 +626,7 @@ def OneshotOursV7(trainset, test_loader, client_idx_map, config, device):
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
 
 def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
-    logger.info('OneshotOursV8 with Progressive Anchor Alignment')
+    logger.info('OneshotOursV8 - Final Version: Consensus-Start Progressive Alignment')
     
     global_model = get_train_models(
         model_name=config['server']['model_name'],
@@ -613,7 +636,6 @@ def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
     global_model.to(device)
     global_model.train()
     
-    # --- V7逻辑: 创建最终的ETF锚点 ---
     feature_dim = global_model.learnable_proto.shape[1]
     num_classes = config['dataset']['num_classes']
     fixed_anchors_etf = generate_etf_anchors(num_classes, feature_dim, device)
@@ -625,10 +647,11 @@ def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
 
     local_models = [copy.deepcopy(global_model) for _ in range(config['client']['num_clients'])]
     
-    # --- V8核心新增：捕获每个客户端模型的初始原型状态 ---
+    # 计算一个共同的“共识起点”
     initial_local_protos = [model.get_proto().detach().clone() for model in local_models]
-    logger.info("Captured initial local prototypes for progressive alignment.")
-    # ----------------------------------------------------
+    # 计算所有初始原型的平均值
+    consensus_start_protos = torch.stack(initial_local_protos).mean(dim=0)
+    logger.info("Calculated a shared CONSENSUS start point for all clients.")
 
     local_data_size = [len(client_idx_map[c]) for c in range(config['client']['num_clients'])]
     weights = [i/sum(local_data_size) for i in local_data_size] if config['server']['aggregated_by_datasize'] else [1/config['client']['num_clients']] * config['client']['num_clients']
@@ -647,9 +670,8 @@ def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
             if cr == 0:
                 clients_sample_per_class.append(generate_sample_per_class(config['dataset']['num_classes'], client_dataloader, len(client_idx_map[c])))
 
-            # --- V8核心修改：调用本地训练，传入新的参数 ---
             local_model_c = ours_local_training(
-                model=local_models[c], # 直接使用，不再深拷贝
+                model=local_models[c],
                 training_data=client_dataloader,
                 test_dataloader=test_loader,
                 start_epoch=cr * config['server']['local_epochs'],
@@ -665,19 +687,17 @@ def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
                 client_model_dir=local_model_dir + f"/client_{c}",
                 save_freq=config['checkpoint']['save_freq'],
                 use_drcl=True,
-                use_progressive_alignment=True, # 启用新的渐进式对齐开关
-                initial_protos=initial_local_protos[c], # 传入初始原型
-                fixed_anchors=fixed_anchors_etf, # 传入最终ETF锚点
+                use_progressive_alignment=True,
+                initial_protos=consensus_start_protos,
+                fixed_anchors=fixed_anchors_etf,
                 lambda_align=config.get('lambda_align_initial', 5.0)
             )
-            # -----------------------------------------------------
             
             local_models[c] = local_model_c
             logger.info(f"Client {c} Finish Local Training--------|")
 
             local_protos.append(local_model_c.get_proto().detach())
 
-        # ... (后续聚合与评估代码与V7/V6完全相同) ...
         logger.info(f"Round {cr} Finish--------|")
         model_var_m, model_var_s = compute_local_model_variance(local_models)
         logger.info(f"Model variance: mean: {model_var_m}, sum: {model_var_s}")
@@ -691,4 +711,3 @@ def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
         method_results[method_name].append(ens_proto_acc)
 
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
-
