@@ -332,7 +332,7 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device, use_simpl
 
 
 # 新增 OneshotOursV5 (DRCL 版本)
-def OneshotOursV5(trainset, test_loader, client_idx_map, config, device):
+def OneshotOursV5(trainset, test_loader, client_idx_map, config, device, use_simple_server=True):
     logger.info('OneshotOursV5 with Decoupled Representation and Classifier Learning (DRCL)')
     # get the global model
     global_model = get_train_models(
@@ -421,8 +421,15 @@ def OneshotOursV5(trainset, test_loader, client_idx_map, config, device):
 
         global_proto = aggregate_local_protos(local_protos)
         
-        method_name = 'OneShotOursV5+Ensemble'
-        ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+        if use_simple_server:
+            method_name = 'OneShotOursV7+SimpleServer'
+            ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+            logger.info("V7 Training | Using SIMPLE server aggregation.")
+        else:
+            method_name = 'OneShotOursV7+AdvancedServer'
+            ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
+            logger.info("V7 Training | Using ADVANCED IFFI server aggregation.")
+            
         ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
         logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
         method_results[method_name].append(ens_proto_acc)
