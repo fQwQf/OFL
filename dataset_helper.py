@@ -235,7 +235,7 @@ def get_client_dataloader(client_idxs, trainset, batch_size):
     client_loader = torch.utils.data.DataLoader(
         trainset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(client_idxs),
-        pin_memory=True, drop_last=True)
+        pin_memory=True, drop_last=False)
 
     return client_loader
 
