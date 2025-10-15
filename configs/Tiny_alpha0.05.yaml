@@ -20,10 +20,10 @@ distribution:
   alpha: 0.05 # dirichlet distribution parameter
 
 client:
-  num_clients: 5
+  num_clients: 20
 
 server:
-  num_rounds: 10
+  num_rounds: 50
   frac_clients: 1.0
   lr: 0.05
   local_epochs: 5
@@ -40,7 +40,7 @@ device: "cuda:0"
 checkpoint:
   save_path: "./checkpoints/"
   save_freq: 5
-  result_file: "CIFAR10_results.yaml"
+  result_file: "Tiny_results.yaml"
 
 pretrain:
   lr: 0.01

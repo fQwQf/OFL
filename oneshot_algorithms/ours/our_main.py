@@ -4,6 +4,8 @@ from models_lib import get_train_models
 
 from common_libs import *
 
+import torch.nn.functional as F
+
 from oneshot_algorithms.ours.our_local_training import ours_local_training
 
 def get_supcon_transform(dataset_name):
@@ -121,14 +123,19 @@ def generate_sample_per_class(num_classes, local_data, data_num):
 
 def aggregate_local_protos(local_protos):
 
-    g_protos = torch.stack(local_protos)
-    g_protos = torch.mean(g_protos, dim=0).detach()
-    # g_protos = torch.median(g_protos, dim=0).values.detach()
+    local_protos = torch.stack(local_protos, dim=0)
 
-    g_protos_std= torch.std(g_protos)
-    logger.info(f'g_protos_std: {g_protos_std}')
+    g_protos = torch.mean(local_protos, dim=0).detach()
+
+    inter_client_proto_std = torch.std(local_protos, dim=0).mean().item()
+
+    g_protos_std = torch.std(g_protos).item()
+
+    logger.info(f'g_protos_std (global internal): {g_protos_std:.6f}')
+    logger.info(f'inter_client_proto_std (cross-client): {inter_client_proto_std:.6f}')
 
     return g_protos
+
 
 
 class WEnsembleFeatureNoise(torch.nn.Module):
@@ -178,8 +185,34 @@ class WEnsembleFeature(torch.nn.Module):
             feature = weight * model.encoder(x)
             feature_total += feature
         return feature_total   
+    
 
-     
+class TrueSimpleEnsembleServer(torch.nn.Module):
+
+    def __init__(self, model_list, weight_list=None):
+        super(TrueSimpleEnsembleServer, self).__init__()
+        # Ensure models are in eval mode for inference
+        self.models = [model.eval() for model in model_list]
+        if weight_list is None:
+            self.weight_list = [1.0 / len(model_list) for _ in range(len(model_list))]
+        else:
+            self.weight_list = weight_list
+
+    def forward(self, x):
+        all_probs = []
+        with torch.no_grad():
+            for model, weight in zip(self.models, self.weight_list):
+                # Get logits from the full model (encoder + classifier/proto)
+                logits, _ = model(x)
+                # Convert to probabilities and apply weight
+                probs = F.softmax(logits, dim=1) * weight
+                all_probs.append(probs)
+        
+        # Sum the weighted probabilities
+        final_probs = torch.sum(torch.stack(all_probs), dim=0)
+        
+        # Return the final probability distribution
+        return final_probs
 
     
 def eval_with_proto(model, test_loader, device, proto):
@@ -203,9 +236,31 @@ def eval_with_proto(model, test_loader, device, proto):
     acc = correct / total
     return acc        
 
+def eval_output_ensemble(model, test_loader, device):
+    """
+    Evaluates an ensemble model that directly outputs class probabilities.
+    """
+    model.eval()
+    model.to(device)
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            
+            # Get final probabilities directly from the model
+            final_probs = model(data)
+            
+            # Get predictions
+            _, predicted = torch.max(final_probs.data, 1)
+            total += target.size(0)
+            correct += (predicted == target).sum().item()
+
+    acc = correct / total
+    return acc
 
 
-def OneshotOurs(trainset, test_loader, client_idx_map, config, device, use_simple_server=True):
+def OneshotOurs(trainset, test_loader, client_idx_map, config, device, server_strategy='simple_feature'):
     logger.info('OneshotOurs')
     # get the global model
     global_model = get_train_models(
@@ -314,18 +369,32 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device, use_simpl
 
         global_proto = aggregate_local_protos(local_protos)
         
-        if use_simple_server:
-            method_name = 'OneShotOursV7+SimpleServer'
-            ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
-            logger.info("V7 Training | Using SIMPLE server aggregation.")
-        else:
-            method_name = 'OneShotOursV7+AdvancedServer'
-            ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
-            logger.info("V7 Training | Using ADVANCED IFFI server aggregation.")
+        if server_strategy == 'true_simple_output':
+            method_name = 'OursV4+TrueSimpleOutputServer'
+            ensemble_model = TrueSimpleEnsembleServer(model_list=local_models, weight_list=weights)
+            logger.info("V4 Training | Using TRULY SIMPLE Output-level Server.")
+            ens_acc = eval_output_ensemble(ensemble_model, test_loader, device)
 
-        ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
-        logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
-        method_results[method_name].append(ens_proto_acc)
+        elif server_strategy == 'simple_feature':
+            method_name = 'OursV4+SimpleFeatureServer'
+            ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+            global_proto = aggregate_local_protos(local_protos)
+            logger.info("V4 Training | Using Simple Feature-level Server.")
+            ens_acc = eval_with_proto(ensemble_model, test_loader, device, global_proto)
+
+        elif server_strategy == 'advanced_iffi':
+            method_name = 'OursV4+AdvancedIFFIServer'
+            ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
+            global_proto = aggregate_local_protos(local_protos)
+            logger.info("V4 Training | Using Advanced IFFI Server.")
+            ens_acc = eval_with_proto(ensemble_model, test_loader, device, global_proto)
+        else:
+            raise ValueError(f"Unknown server_strategy: {server_strategy}")
+
+        logger.info(f"The test accuracy of {method_name}: {ens_acc}")
+
+
+        method_results[method_name].append(ens_acc)
 
 
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
@@ -422,13 +491,13 @@ def OneshotOursV5(trainset, test_loader, client_idx_map, config, device, use_sim
         global_proto = aggregate_local_protos(local_protos)
         
         if use_simple_server:
-            method_name = 'OneShotOursV7+SimpleServer'
+            method_name = 'OneShotOursV5+SimpleServer'
             ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
-            logger.info("V7 Training | Using SIMPLE server aggregation.")
+            logger.info("V5 Training | Using SIMPLE server aggregation.")
         else:
-            method_name = 'OneShotOursV7+AdvancedServer'
+            method_name = 'OneShotOursV5+AdvancedServer'
             ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
-            logger.info("V7 Training | Using ADVANCED IFFI server aggregation.")
+            logger.info("V5 Training | Using ADVANCED IFFI server aggregation.")
             
         ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
         logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
@@ -521,13 +590,13 @@ def OneshotOursV6(trainset, test_loader, client_idx_map, config, device, use_sim
         global_proto = aggregate_local_protos(local_protos)
         
         if use_simple_server:
-            method_name = 'OneShotOursV7+SimpleServer'
+            method_name = 'OneShotOursV6+SimpleServer'
             ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
-            logger.info("V7 Training | Using SIMPLE server aggregation.")
+            logger.info("V6 Training | Using SIMPLE server aggregation.")
         else:
-            method_name = 'OneShotOursV7+AdvancedServer'
+            method_name = 'OneShotOursV6+AdvancedServer'
             ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
-            logger.info("V7 Training | Using ADVANCED IFFI server aggregation.")
+            logger.info("V6 Training | Using ADVANCED IFFI server aggregation.")
             
         ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
         logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
@@ -536,7 +605,7 @@ def OneshotOursV6(trainset, test_loader, client_idx_map, config, device, use_sim
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
 
 # OneshotOursV7 (ETF Anchors + Lambda Annealing)
-def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, use_simple_server=True):
+def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, server_strategy='simple_feature'):
     logger.info('OneshotOursV7 with DRCL (ETF Anchors) and Lambda Annealing')
     
     global_model = get_train_models(
@@ -617,18 +686,32 @@ def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, use_sim
 
         global_proto = aggregate_local_protos(local_protos)
         
-        if use_simple_server:
-            method_name = 'OneShotOursV7+SimpleServer'
+        if server_strategy == 'true_simple_output':
+            method_name = 'OursV7+TrueSimpleOutputServer'
+            ensemble_model = TrueSimpleEnsembleServer(model_list=local_models, weight_list=weights)
+            logger.info("V7 Training | Using TRULY SIMPLE Output-level Server.")
+            ens_acc = eval_output_ensemble(ensemble_model, test_loader, device)
+
+        elif server_strategy == 'simple_feature':
+            method_name = 'OursV7+SimpleFeatureServer'
             ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
-            logger.info("V7 Training | Using SIMPLE server aggregation.")
-        else:
-            method_name = 'OneShotOursV7+AdvancedServer'
+            global_proto = aggregate_local_protos(local_protos)
+            logger.info("V7 Training | Using Simple Feature-level Server.")
+            ens_acc = eval_with_proto(ensemble_model, test_loader, device, global_proto)
+
+        elif server_strategy == 'advanced_iffi':
+            method_name = 'OursV7+AdvancedIFFIServer'
             ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
-            logger.info("V7 Training | Using ADVANCED IFFI server aggregation.")
-            
-        ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
-        logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
-        method_results[method_name].append(ens_proto_acc)
+            global_proto = aggregate_local_protos(local_protos)
+            logger.info("V7 Training | Using Advanced IFFI Server.")
+            ens_acc = eval_with_proto(ensemble_model, test_loader, device, global_proto)
+        else:
+            raise ValueError(f"Unknown server_strategy: {server_strategy}")
+
+        logger.info(f"The test accuracy of {method_name}: {ens_acc}")
+
+
+        method_results[method_name].append(ens_acc)
 
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
 

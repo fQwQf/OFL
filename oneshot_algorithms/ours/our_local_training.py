@@ -66,7 +66,7 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
                 align_loss = alignment_loss_fn(model.learnable_proto, fixed_anchors)
 
             if use_drcl and fixed_anchors is not None:
-                # 线性衰减：从 initial_lambda 降至 0
+                # 从 initial_lambda 降至 0
                 progress = (e - start_epoch) / local_epochs
                 lambda_annealed = initial_lambda * (1 - progress)
 
