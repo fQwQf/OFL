@@ -25,8 +25,8 @@ client:
 server:
   num_rounds: 50
   frac_clients: 1.0
-  lr: 0.05
-  local_epochs: 5
+  lr: 0.01
+  local_epochs: 3
   optimizer: "sgd" # choice: [sgd, adam]
   momentum: 0.9
   weight_decay: 0.0001
@@ -80,4 +80,4 @@ resume: True
 resume_best: False
 seed: 1
 
-lambda_align_initial: 5.0
+lambda_align_initial: 50.0

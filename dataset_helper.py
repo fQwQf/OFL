@@ -184,34 +184,54 @@ def generate_class_comb(num_groups, num_class, num_class_each_comb):
     return class_comb
 
 
+# In dataset_helper.py
+# PLEASE REPLACE YOUR ENTIRE dirichlet FUNCTION WITH THIS ONE
+
 def dirichlet(data_idxs_dict, num_users, alpha):
-    
-    client_idx_map = defaultdict(list)
-    
-    label_num = len(data_idxs_dict)
-    each_label_num = len(data_idxs_dict[0])
-    
-    scalenum = 10
+    """
+    Distributes data among clients using a Dirichlet distribution, ensuring
+    all data is used and sampled without replacement.
+    This is the scientifically sound "card dealer" or "cake cutting" model.
+    """
+    num_classes = len(data_idxs_dict)
+    client_idx_map = {i: [] for i in range(num_users)}
 
-    image_nums = []
+    for k in range(num_classes):
+        # Get the shuffled indices for the current class
+        idx_k = data_idxs_dict[k]
+        random.shuffle(idx_k)
+        
+        # Generate proportions for each client for this class
+        proportions = np.random.dirichlet(np.repeat(alpha, num_users))
+        
+        # Ensure the sum of proportions doesn't lead to losing data due to rounding
+        # This calculates the exact number of samples for each client
+        num_samples_per_client = (proportions * len(idx_k)).astype(int)
+        
+        # Because of integer rounding, there might be a few samples left.
+        # Distribute the remainder samples one by one to some random clients.
+        rem = len(idx_k) - num_samples_per_client.sum()
+        add_for_clients = np.random.choice(range(num_users), rem, replace=False)
+        for client_id in add_for_clients:
+            num_samples_per_client[client_id] += 1
+            
+        # --- The CRITICAL FIX: Slicing and consuming the data ---
+        current_pos = 0
+        for i in range(num_users):
+            num_samples = num_samples_per_client[i]
+            # Get the slice of data for the current client
+            client_idx_map[i].extend(idx_k[current_pos : current_pos + num_samples])
+            # Move the pointer forward
+            current_pos += num_samples
 
-    for n in range(label_num):
-        image_num = []
+    # Final shuffle for each client's combined data
+    for i in range(num_users):
+        random.shuffle(client_idx_map[i])
         
-        random.shuffle(data_idxs_dict[n])
-        sampled_probabilities = int(scalenum) * each_label_num * np.random.dirichlet(
-            np.array(num_users * [alpha]))
-        for user in range(num_users):
-            no_imgs = int(round(sampled_probabilities[user]))
-            sampled_list = data_idxs_dict[n][:min(len(data_idxs_dict[n]), no_imgs)]
-            
-            image_num.append(len(sampled_list))
-            
-            client_idx_map[user].extend(sampled_list)
-            random.shuffle(data_idxs_dict[n])
-        
-        image_nums.append(image_num)
-        # print(image_nums)
+    logger.info("Data distribution generated correctly using the corrected dirichlet function.")
+    total_assigned = sum(len(v) for v in client_idx_map.values())
+    logger.info(f"Total assigned samples: {total_assigned}")
+    
     return client_idx_map
 
 
@@ -272,7 +292,7 @@ def get_uniform_subset_dataloader(trainset, subsize, batch_size):
     subset_loader = torch.utils.data.DataLoader(
         trainset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(idxs),
-        pin_memory=True, drop_last=True)
+        pin_memory=True, drop_last=False)
 
     return subset_loader
 

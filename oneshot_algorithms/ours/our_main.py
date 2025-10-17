@@ -302,6 +302,8 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device, server_st
 
     noise_samples = torch.randn_like(vis_data)
 
+    total_rounds = config['server']['num_rounds']
+
 
     # sample_per_class
     clients_sample_per_class = []
@@ -337,6 +339,7 @@ def OneshotOurs(trainset, test_loader, client_idx_map, config, device, server_st
                 sample_per_class=clients_sample_per_class[c],
                 aug_transformer=aug_transformer,
                 client_model_dir=local_model_dir + f"/client_{c}",
+                total_rounds=total_rounds,
                 save_freq=config['checkpoint']['save_freq'],
             )
             
@@ -440,6 +443,8 @@ def OneshotOursV5(trainset, test_loader, client_idx_map, config, device, use_sim
 
     clients_sample_per_class = []
 
+    total_rounds = config['server']['num_rounds']
+
     for cr in trange(config['server']['num_rounds']):
         logger.info(f"Round {cr} starts--------|")
         
@@ -469,6 +474,7 @@ def OneshotOursV5(trainset, test_loader, client_idx_map, config, device, use_sim
                 sample_per_class=clients_sample_per_class[c],
                 aug_transformer=aug_transformer,
                 client_model_dir=local_model_dir + f"/client_{c}",
+                total_rounds=total_rounds,
                 save_freq=config['checkpoint']['save_freq'],
                 # 传入新参数以启用DRCL
                 use_drcl=True,
@@ -540,6 +546,8 @@ def OneshotOursV6(trainset, test_loader, client_idx_map, config, device, use_sim
 
     clients_sample_per_class = []
 
+    total_rounds = config['server']['num_rounds']
+
     for cr in trange(config['server']['num_rounds']):
         logger.info(f"Round {cr} starts--------|")
         
@@ -569,6 +577,7 @@ def OneshotOursV6(trainset, test_loader, client_idx_map, config, device, use_sim
                 sample_per_class=clients_sample_per_class[c],
                 aug_transformer=aug_transformer,
                 client_model_dir=local_model_dir + f"/client_{c}",
+                total_rounds=total_rounds,
                 save_freq=config['checkpoint']['save_freq'],
                 use_drcl=True,
                 fixed_anchors=fixed_anchors,
@@ -639,6 +648,8 @@ def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, server_
 
     clients_sample_per_class = []
 
+    total_rounds = config['server']['num_rounds']
+
     for cr in trange(config['server']['num_rounds']):
         logger.info(f"Round {cr} starts--------|")
         
@@ -667,6 +678,7 @@ def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, server_
                 sample_per_class=clients_sample_per_class[c],
                 aug_transformer=aug_transformer,
                 client_model_dir=local_model_dir + f"/client_{c}",
+                total_rounds=total_rounds,
                 save_freq=config['checkpoint']['save_freq'],
                 use_drcl=True,
                 fixed_anchors=fixed_anchors,
@@ -749,6 +761,8 @@ def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
     aug_transformer = get_supcon_transform(config['dataset']['data_name'])
     clients_sample_per_class = []
 
+    total_rounds = config['server']['num_rounds']
+
     for cr in trange(config['server']['num_rounds']):
         logger.info(f"Round {cr} starts--------|")
         local_protos = []
@@ -775,6 +789,7 @@ def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
                 sample_per_class=clients_sample_per_class[c],
                 aug_transformer=aug_transformer,
                 client_model_dir=local_model_dir + f"/client_{c}",
+                total_rounds=total_rounds,
                 save_freq=config['checkpoint']['save_freq'],
                 use_drcl=True,
                 use_progressive_alignment=True,

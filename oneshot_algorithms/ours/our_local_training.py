@@ -6,13 +6,13 @@ from common_libs import *
 # 导入AMP所需的库
 from torch.cuda.amp import autocast, GradScaler
 
-def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, save_freq=1, use_drcl=False, fixed_anchors=None, lambda_align=1.0, use_progressive_alignment=False, initial_protos=None):
+def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, total_rounds, save_freq=1, use_drcl=False, fixed_anchors=None, lambda_align=1.0, use_progressive_alignment=False, initial_protos=None):
     model.train()
     model.to(device)
 
     optimizer = init_optimizer(model, optim_name, lr, momentum)
     cls_loss_fn = torch.nn.CrossEntropyLoss()
-    contrastive_loss_fn = SupConLoss(temperature=0.07)
+    contrastive_loss_fn = SupConLoss(temperature=0.5)
     con_proto_feat_loss_fn = Contrastive_proto_feature_loss(temperature=1.0)
     con_proto_loss_fn = Contrastive_proto_loss(temperature=1.0)
 
@@ -26,6 +26,8 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
     accumulation_steps = 1
 
     initial_lambda = lambda_align
+
+    total_training_steps = total_rounds * local_epochs
 
     for e in range(start_epoch, start_epoch + local_epochs):
         total_loss = 0
@@ -64,9 +66,12 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
                 # 归一化损失以适应梯度累积
                 loss = base_loss
                 if use_drcl or use_progressive_alignment:
-                    progress = (e - start_epoch) / local_epochs
-                    lambda_annealed = initial_lambda * (1 - progress)
-                    loss += lambda_annealed * align_loss
+                    global_progress = e / total_training_steps
+                    
+                    # This is a one-way trip from initial_lambda to 0
+                    lambda_annealed = initial_lambda * (1 - global_progress)
+                    
+                    loss = base_loss + lambda_annealed * align_loss
                 
                 loss = loss / accumulation_steps
 
