@@ -80,4 +80,4 @@ resume: True
 resume_best: False
 seed: 114514
 
-lambda_align_initial: 5.0
+lambda_align_initial: 1.0
