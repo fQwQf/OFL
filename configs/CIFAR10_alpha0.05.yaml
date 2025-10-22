@@ -81,3 +81,7 @@ resume_best: False
 seed: 1
 
 lambda_align_initial: 5.0
+
+use_adaptive_lambda: true
+lambda_min: 1.0 
+lambda_max: 10.0

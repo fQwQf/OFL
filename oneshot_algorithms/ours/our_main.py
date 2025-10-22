@@ -8,6 +8,40 @@ import torch.nn.functional as F
 
 from oneshot_algorithms.ours.our_local_training import ours_local_training
 
+import math
+
+def calculate_adaptive_lambda(client_dataloader, num_classes, lambda_min, lambda_max, device):
+    """Calculates a client-specific lambda based on the entropy of its local data distribution."""
+    counts = torch.zeros(num_classes, device=device)
+    total_samples = 0
+    for _, targets in client_dataloader:
+        targets = targets.to(device)
+        for i in range(num_classes):
+            counts[i] += (targets == i).sum()
+        total_samples += len(targets)
+
+    if total_samples == 0:
+        return (lambda_min + lambda_max) / 2 # A safe default
+
+    probs = counts / total_samples
+    probs = probs[probs > 0] # Remove zero probabilities for log calculation
+    
+    entropy = -torch.sum(probs * torch.log2(probs))
+    
+    # Normalize entropy to [0, 1]
+    max_entropy = math.log2(num_classes)
+    if max_entropy == 0: # Handle single-class case
+        normalized_entropy = 0
+    else:
+        normalized_entropy = entropy.item() / max_entropy
+
+    # Map normalized entropy to the [lambda_min, lambda_max] range
+    adaptive_lambda = lambda_min + normalized_entropy * (lambda_max - lambda_min)
+    
+    logger.info(f"Data entropy: {entropy:.4f}, Normalized: {normalized_entropy:.4f} -> Adaptive Lambda: {adaptive_lambda:.4f}")
+    
+    return adaptive_lambda
+
 def get_supcon_transform(dataset_name):
     if dataset_name == 'CIFAR10' or dataset_name == 'CIFAR100' or dataset_name == 'SVHN':
         return torchvision.transforms.Compose([
@@ -814,5 +848,128 @@ def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
         ens_proto_acc = eval_with_proto(copy.deepcopy(ensemble_model), test_loader, device, global_proto)
         logger.info(f"The test accuracy (with prototype) of {method_name}: {ens_proto_acc}")
         method_results[method_name].append(ens_proto_acc)
+
+        save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
+
+# OneshotOursV9 
+def OneshotOursV9(trainset, test_loader, client_idx_map, config, device, server_strategy='simple_feature'):
+    logger.info('OneshotOursV9 with DRCL (ETF Anchors) and Lambda Annealing')
+    
+    global_model = get_train_models(
+        model_name=config['server']['model_name'],
+        num_classes=config['dataset']['num_classes'],
+        mode='our'
+    )
+    global_model.to(device)
+    global_model.train()
+
+    use_adaptive_lambda = config.get('use_adaptive_lambda', False)
+    lambda_min = config.get('lambda_min', 1.0)
+    lambda_max = config.get('lambda_max', 10.0)
+
+    # --- 核心修改：使用ETF锚点替换随机锚点 ---
+    feature_dim = global_model.learnable_proto.shape[1]
+    num_classes = config['dataset']['num_classes']
+    fixed_anchors = generate_etf_anchors(num_classes, feature_dim, device)
+    logger.info(f"Initialized ETF fixed anchors with shape: {fixed_anchors.shape}")
+
+    method_results = defaultdict(list)
+    save_path, local_model_dir = prepare_checkpoint_dir(config)
+    if not os.path.exists(save_path + "/config.yaml"):
+        save_yaml_config(save_path + "/config.yaml", config) 
+
+    local_models = [copy.deepcopy(global_model) for _ in range(config['client']['num_clients'])]
+    
+    local_data_size = [len(client_idx_map[c]) for c in range(config['client']['num_clients'])]
+    if config['server']['aggregated_by_datasize']:
+        weights = [i/sum(local_data_size) for i in local_data_size]
+    else:
+        weights = [1/config['client']['num_clients'] for _ in range(config['client']['num_clients'])]        
+    
+    aug_transformer = get_supcon_transform(config['dataset']['data_name'])
+
+    clients_sample_per_class = []
+
+    total_rounds = config['server']['num_rounds']
+
+    for cr in trange(config['server']['num_rounds']):
+        logger.info(f"Round {cr} starts--------|")
+        
+        local_protos = []
+        
+        for c in range(config['client']['num_clients']):
+            logger.info(f"Client {c} Starts Local Trainning--------|")
+            client_dataloader = get_client_dataloader(client_idx_map[c], trainset, config['dataset']['train_batch_size'])
+
+            if cr == 0:
+                clients_sample_per_class.append(generate_sample_per_class(config['dataset']['num_classes'], client_dataloader, len(client_idx_map[c])))
+
+            if use_adaptive_lambda:
+                current_lambda = calculate_adaptive_lambda(client_dataloader, config['dataset']['num_classes'], lambda_min, lambda_max, device)
+            else:
+                current_lambda = config.get('lambda_align_initial', 5.0) 
+
+            # 调用与V6完全相同的本地训练函数，但传入的是高质量的ETF锚点
+            local_model_c = ours_local_training(
+                model=copy.deepcopy(local_models[c]),
+                training_data=client_dataloader,
+                test_dataloader=test_loader,
+                start_epoch=cr * config['server']['local_epochs'],
+                local_epochs=config['server']['local_epochs'],
+                optim_name=config['server']['optimizer'],
+                lr=config['server']['lr'],
+                momentum=config['server']['momentum'],
+                loss_name=config['server']['loss_name'],
+                device=device,
+                num_classes=config['dataset']['num_classes'],
+                sample_per_class=clients_sample_per_class[c],
+                aug_transformer=aug_transformer,
+                client_model_dir=local_model_dir + f"/client_{c}",
+                total_rounds=total_rounds,
+                save_freq=config['checkpoint']['save_freq'],
+                use_drcl=True,
+                fixed_anchors=fixed_anchors,
+                lambda_align=current_lambda
+            )
+            
+            local_models[c] = local_model_c
+            logger.info(f"Client {c} Finish Local Training--------|")
+
+            local_proto_c = local_model_c.get_proto().detach()
+            local_protos.append(local_proto_c)
+            logger.info(f"Client {c} Collecting Local Prototypes--------|")
+
+        logger.info(f"Round {cr} Finish--------|")
+        model_var_m, model_var_s = compute_local_model_variance(local_models)
+        logger.info(f"Model variance: mean: {model_var_m}, sum: {model_var_s}")
+
+        global_proto = aggregate_local_protos(local_protos)
+        
+        if server_strategy == 'true_simple_output':
+            method_name = 'OursV9+TrueSimpleOutputServer'
+            ensemble_model = TrueSimpleEnsembleServer(model_list=local_models, weight_list=weights)
+            logger.info("V9 Training | Using TRULY SIMPLE Output-level Server.")
+            ens_acc = eval_output_ensemble(ensemble_model, test_loader, device)
+
+        elif server_strategy == 'simple_feature':
+            method_name = 'OursV9+SimpleFeatureServer'
+            ensemble_model = WEnsembleFeature(model_list=local_models, weight_list=weights)
+            global_proto = aggregate_local_protos(local_protos)
+            logger.info("V9 Training | Using Simple Feature-level Server.")
+            ens_acc = eval_with_proto(ensemble_model, test_loader, device, global_proto)
+
+        elif server_strategy == 'advanced_iffi':
+            method_name = 'OursV9+AdvancedIFFIServer'
+            ensemble_model = WEnsembleFeatureNoise(model_list=local_models, weight_list=weights)
+            global_proto = aggregate_local_protos(local_protos)
+            logger.info("V9 Training | Using Advanced IFFI Server.")
+            ens_acc = eval_with_proto(ensemble_model, test_loader, device, global_proto)
+        else:
+            raise ValueError(f"Unknown server_strategy: {server_strategy}")
+
+        logger.info(f"The test accuracy of {method_name}: {ens_acc}")
+
+
+        method_results[method_name].append(ens_acc)
 
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
