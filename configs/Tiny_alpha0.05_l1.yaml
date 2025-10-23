@@ -1,9 +1,9 @@
-exp_name: "Tiny_alpha0.3"
+exp_name: "Tiny_alpha0.05"
 dataset:
   data_name: "Tiny-ImageNet" # choice: [CIFAR10, CIFAR100, MNIST, FMNIST, Tiny-ImageNet]
   root_path: "~/datasets/"
   # root_path: 'H:/codes/dataset'
-  train_batch_size: 256
+  train_batch_size: 128
   test_batch_size: 256
   channels: 3
   num_classes: 200
@@ -17,30 +17,30 @@ dataset:
 distribution:
   type: "dirichlet" # choice: [iid, noniid, dirichlet]
   label_num_per_client: 2 # non-iid parameter
-  alpha: 0.3 # dirichlet distribution parameter
+  alpha: 0.05 # dirichlet distribution parameter
 
 client:
   num_clients: 5
 
 server:
-  num_rounds: 10
+  num_rounds: 100
   frac_clients: 1.0
-  lr: 0.05
-  local_epochs: 5
+  lr: 0.005
+  local_epochs: 1
   optimizer: "sgd" # choice: [sgd, adam]
   momentum: 0.9
   weight_decay: 0.0001
   loss_name: "ce" # choice: [ce, mse, nll]
   model_name: "resnet18"
   aggregated_by_datasize: True
-  lr_decay_per_round: 0.998
+  lr_decay_per_round: 0.99
 
 device: "cuda:0"
 
 checkpoint:
   save_path: "./checkpoints/"
   save_freq: 5
-  result_file: "CIFAR10_results.yaml"
+  result_file: "Tiny_results.yaml"
 
 pretrain:
   lr: 0.01
@@ -65,7 +65,7 @@ DBCD:
   encoder_lr: 0.03
   cls_optimizer: 'sgd'
   cls_lr: 0.05
-  supcon_temp: 0.07
+  supcon_temp: 0.5
   super_gr: 100
   aux_with_public: True
 
@@ -80,4 +80,4 @@ resume: True
 resume_best: False
 seed: 1
 
-lambda_align_initial: 5.0
+lambda_align_initial: 1.0

@@ -1,7 +1,7 @@
 exp_name: "Tiny_alpha0.1"
 dataset:
   data_name: "Tiny-ImageNet" # choice: [CIFAR10, CIFAR100, MNIST, FMNIST, Tiny-ImageNet]
-  root_path: "/data0/wxy_data/datasets/"
+  root_path: "~/datasets/"
   # root_path: 'H:/codes/dataset'
   train_batch_size: 256
   test_batch_size: 256
@@ -10,7 +10,7 @@ dataset:
   image_size: 64 # [CIFAR: 32, MNIST: 28]
 
   aux_data_name: "Tiny-ImageNet"
-  aux_root_path: "/data0/wxy_data/datasets/"
+  aux_root_path: "~/datasets/"
   # aux_root_path: "H:/codes/dataset"
   aux_split: 'test'
 
@@ -35,7 +35,7 @@ server:
   aggregated_by_datasize: True
   lr_decay_per_round: 0.998
 
-device: "cuda:4"
+device: "cuda:0"
 
 checkpoint:
   save_path: "./checkpoints/"
@@ -80,3 +80,4 @@ resume: True
 resume_best: False
 seed: 1
 
+lambda_align_initial: 5.0

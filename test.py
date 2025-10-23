@@ -59,7 +59,28 @@ elif config_args.algo == 'FedETF':
 #     FedBCD3(trainset, test_loader, client_idx_map, config, global_model, device)
 elif config_args.algo == 'OursV4':
     OneshotOurs(trainset, test_loader, client_idx_map, config, device)
-
+elif config_args.algo == 'OursV5':
+    OneshotOursV5(trainset, test_loader, client_idx_map, config, device)
+elif config_args.algo == 'OursV6':
+    OneshotOursV6(trainset, test_loader, client_idx_map, config, device)
+elif config_args.algo == 'OursV7':
+    OneshotOursV7(trainset, test_loader, client_idx_map, config, device)
+elif config_args.algo == 'OursV8':
+    OneshotOursV8(trainset, test_loader, client_idx_map, config, device)
+elif config_args.algo == 'OursV9':
+    OneshotOursV9(trainset, test_loader, client_idx_map, config, device)
+elif config_args.algo == 'OursV6IFFI':
+    OneshotOursV6(trainset, test_loader, client_idx_map, config, device, use_simple_server=False)
+elif config_args.algo == 'OursV4IFFI':
+    OneshotOurs(trainset, test_loader, client_idx_map, config, device, server_strategy='advanced_iffi')
+elif config_args.algo == 'OursV7IFFI':
+    OneshotOursV7(trainset, test_loader, client_idx_map, config, device, server_strategy='advanced_iffi')
+elif config_args.algo == 'OursV5IFFI':
+    OneshotOursV5(trainset, test_loader, client_idx_map, config, device, use_simple_server=False)
+elif config_args.algo == 'OursV4SIMPLE':
+    OneshotOurs(trainset, test_loader, client_idx_map, config, device, server_strategy='true_simple_output')
+elif config_args.algo == 'OursV7SIMPLE':
+    OneshotOursV7(trainset, test_loader, client_idx_map, config, device, server_strategy='true_simple_output')
 else:
     raise NotImplementedError(f"Algorithm {config_args.algo} is not implemented.")   
 

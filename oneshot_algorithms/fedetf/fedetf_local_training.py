@@ -25,6 +25,17 @@ def fedetf_local_training(model, training_data, test_dataloader,
     
     model.train()
     model.to(device)
+
+    try:
+        if hasattr(model, "proto_classifier"):
+            proto = getattr(model.proto_classifier, "proto", None)
+            if isinstance(proto, torch.Tensor):
+                model.proto_classifier.proto = proto.to(device)
+    except Exception:
+        pass
+
+    if sample_per_class is not None and isinstance(sample_per_class, torch.Tensor):
+        sample_per_class = sample_per_class.to(device)
     
     optimizer = init_optimizer(model, optim_name, lr, momentum)
     

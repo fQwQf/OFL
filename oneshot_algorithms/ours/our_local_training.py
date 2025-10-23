@@ -3,7 +3,10 @@ from oneshot_algorithms.ours.unsupervised_loss import SupConLoss, Contrastive_pr
 
 from common_libs import *
 
-def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, save_freq=1):
+# 导入AMP所需的库
+from torch.cuda.amp import autocast, GradScaler
+
+def ours_local_training(model, training_data, test_dataloader, start_epoch, local_epochs, optim_name, lr, momentum, loss_name, device, num_classes, sample_per_class, aug_transformer, client_model_dir, total_rounds, save_freq=1, use_drcl=False, fixed_anchors=None, lambda_align=1.0, use_progressive_alignment=False, initial_protos=None):
     model.train()
     model.to(device)
 
@@ -12,6 +15,14 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
     contrastive_loss_fn = SupConLoss(temperature=0.07)
     con_proto_feat_loss_fn = Contrastive_proto_feature_loss(temperature=1.0)
     con_proto_loss_fn = Contrastive_proto_loss(temperature=1.0)
+
+    # 如果使用DRCL，定义对齐损失函数
+    if use_drcl:
+        alignment_loss_fn = torch.nn.MSELoss()
+
+    initial_lambda = lambda_align
+
+    total_training_steps = total_rounds * local_epochs
 
     for e in range(start_epoch, start_epoch + local_epochs):
         total_loss = 0
@@ -43,8 +54,32 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
             # prototype self constrastive 
             pro_con_loss = con_proto_loss_fn(model.learnable_proto)
 
-            
-            loss = cls_loss + contrastive_loss + pro_con_loss + pro_feat_con_loss
+            # 计算基础损失，并根据开关决定是否加入对齐损失
+            base_loss = cls_loss + contrastive_loss + pro_con_loss + pro_feat_con_loss
+
+            align_loss = 0
+
+            # 选择对齐策略
+            if use_progressive_alignment and initial_protos is not None and fixed_anchors is not None:
+                # OursV8 逻辑: 渐进式对齐
+                progress = (e - start_epoch) / local_epochs
+                # 动态计算插值目标
+                target_anchor = (1 - progress) * initial_protos + progress * fixed_anchors
+                align_loss = alignment_loss_fn(model.learnable_proto, target_anchor)
+            elif use_drcl and fixed_anchors is not None:
+                # OursV5, V6, V7 逻辑: 对齐到固定目标
+                align_loss = alignment_loss_fn(model.learnable_proto, fixed_anchors)
+
+            if use_drcl and fixed_anchors is not None:
+                # 从 initial_lambda 降至 0
+                global_progress = e / total_training_steps
+
+                lambda_annealed = initial_lambda * (1 - global_progress)
+                    
+                loss = base_loss + lambda_annealed * align_loss
+            else:
+                loss = base_loss
+
 
             loss.backward()
 
@@ -53,7 +88,7 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
             optimizer.step()
 
             total_loss += loss.item()
-    
+
         train_test_acc = test_acc(copy.deepcopy(model), test_dataloader, device, mode='etf')
         train_set_acc = test_acc(copy.deepcopy(model), training_data, device, mode='etf')
 
@@ -64,6 +99,3 @@ def ours_local_training(model, training_data, test_dataloader, start_epoch, loca
 
 
     return model
-
-
-
