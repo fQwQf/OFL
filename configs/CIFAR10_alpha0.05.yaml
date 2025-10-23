@@ -82,6 +82,12 @@ seed: 1
 
 lambda_align_initial: 5.0
 
-use_adaptive_lambda: true
-lambda_min: 1.0 
-lambda_max: 10.0
+v9_config:
+  use_adaptive_lambda: false
+  lambda_min: 0.1
+  lambda_max: 10.0
+
+  use_server_optimization: false
+  server_lr: 0.001
+  server_epochs: 20
+  gamma_etf_reg: 0.1

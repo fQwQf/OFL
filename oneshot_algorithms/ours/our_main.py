@@ -10,6 +10,9 @@ from oneshot_algorithms.ours.our_local_training import ours_local_training
 
 import math
 
+import torch.optim as optim
+
+
 def calculate_adaptive_lambda(client_dataloader, num_classes, lambda_min, lambda_max, device):
     """Calculates a client-specific lambda based on the entropy of its local data distribution."""
     counts = torch.zeros(num_classes, device=device)
@@ -111,6 +114,72 @@ def generate_etf_anchors(num_classes, feature_dim, device):
     
     return etf_anchors
 
+
+def optimize_global_prototypes_on_server(
+    local_protos_list, 
+    trainable_global_prototypes, 
+    etf_anchors,
+    server_lr, 
+    server_epochs, 
+    gamma_etf_reg, 
+    device
+):
+    """
+    Implements Plan B: Aggregation-as-Optimization on the server.
+    This function takes the client protos as a mini-dataset and trains
+    the server's own global prototypes.
+    """
+    logger.info("--- Starting Server-Side Optimization (Plan B) ---")
+    
+    # Set up a dedicated optimizer for the global prototypes
+    server_optimizer = optim.Adam(trainable_global_prototypes.parameters(), lr=server_lr)
+    
+    # The uploaded local prototypes are our "training data"
+    # Shape: [num_clients, num_classes, feature_dim]
+    local_protos_tensor = torch.stack(local_protos_list).to(device)
+    num_clients, num_classes, _ = local_protos_tensor.shape
+
+    # Loss functions
+    contrastive_loss_fn = torch.nn.CrossEntropyLoss()
+    etf_reg_loss_fn = torch.nn.MSELoss()
+
+    # The server's internal training loop
+    for epoch in range(server_epochs):
+        total_server_loss = 0
+        for i in range(num_clients): # Iterate through each client's perspective
+            client_protos = local_protos_tensor[i] # [num_classes, feature_dim]
+            
+            server_optimizer.zero_grad()
+            
+            # The "model" is just the global prototype embedding layer
+            current_global_prototypes = trainable_global_prototypes.weight
+
+            # --- L_contrastive (inspired by FedTGP) ---
+            # Calculate similarity: what the server thinks vs. what the client thinks
+            # The "logits" are the similarities between the client's protos and the server's global protos
+            similarity_matrix = torch.matmul(client_protos, current_global_prototypes.t())
+            
+            # The "labels" are just 0, 1, 2, ..., num_classes-1
+            labels = torch.arange(num_classes).to(device)
+            
+            l_contrastive = contrastive_loss_fn(similarity_matrix, labels)
+
+            # --- L_etf_reg (our innovation) ---
+            # Gently pull the trainable protos towards the ideal ETF structure
+            l_etf_reg = etf_reg_loss_fn(current_global_prototypes, etf_anchors)
+
+            # --- Total Server Loss ---
+            loss = l_contrastive + gamma_etf_reg * l_etf_reg
+            
+            loss.backward()
+            server_optimizer.step()
+            total_server_loss += loss.item()
+        
+        if (epoch + 1) % 10 == 0:
+            logger.info(f"Server Epoch {epoch+1}/{server_epochs}, Avg Loss: {total_server_loss / num_clients:.4f}")
+
+    logger.info("--- Finished Server-Side Optimization ---")
+    return trainable_global_prototypes # Return the updated parameter wrapper
 
 def agg_protos(protos):
     for [label, proto_list] in protos.items():
@@ -853,7 +922,12 @@ def OneshotOursV8(trainset, test_loader, client_idx_map, config, device):
 
 # OneshotOursV9 
 def OneshotOursV9(trainset, test_loader, client_idx_map, config, device, server_strategy='simple_feature'):
-    logger.info('OneshotOursV9 with DRCL (ETF Anchors) and Lambda Annealing')
+    logger.info('OneshotOursV9 with a lot of things combined')
+
+    v9_cfg = config.get('v9_config', {})
+    use_adaptive_lambda = v9_cfg.get('use_adaptive_lambda', False)
+    use_server_optimization = v9_cfg.get('use_server_optimization', False)
+    logger.info(f"V9 Config: Adaptive Lambda (Plan A): {use_adaptive_lambda}, Server Optimization (Plan B): {use_server_optimization}")
     
     global_model = get_train_models(
         model_name=config['server']['model_name'],
@@ -863,15 +937,25 @@ def OneshotOursV9(trainset, test_loader, client_idx_map, config, device, server_
     global_model.to(device)
     global_model.train()
 
-    use_adaptive_lambda = config.get('use_adaptive_lambda', False)
-    lambda_min = config.get('lambda_min', 1.0)
-    lambda_max = config.get('lambda_max', 10.0)
-
     # --- 核心修改：使用ETF锚点替换随机锚点 ---
     feature_dim = global_model.learnable_proto.shape[1]
     num_classes = config['dataset']['num_classes']
-    fixed_anchors = generate_etf_anchors(num_classes, feature_dim, device)
-    logger.info(f"Initialized ETF fixed anchors with shape: {fixed_anchors.shape}")
+    etf_anchors = generate_etf_anchors(num_classes, feature_dim, device)
+    logger.info(f"Initialized ETF fixed anchors with shape: {etf_anchors.shape}")
+    
+    logger.info(v9_cfg)
+
+    # Initialize Server-Side Learnable Components (for Plan B) ---
+    if use_server_optimization:
+        feature_dim = global_model.learnable_proto.shape[1]
+        num_classes = config['dataset']['num_classes']
+        # This is our trainable parameter on the server
+        trainable_global_prototypes = torch.nn.Embedding(num_classes, feature_dim).to(device)
+        # Initialize with the ideal ETF structure
+        trainable_global_prototypes.weight.data.copy_(etf_anchors)
+    else:
+        # If Plan B is off, the "global prototype" is just the static ETF anchor
+        trainable_global_prototypes = None 
 
     method_results = defaultdict(list)
     save_path, local_model_dir = prepare_checkpoint_dir(config)
@@ -894,6 +978,14 @@ def OneshotOursV9(trainset, test_loader, client_idx_map, config, device, server_
 
     for cr in trange(config['server']['num_rounds']):
         logger.info(f"Round {cr} starts--------|")
+
+        # Determine the alignment target for this round
+        if use_server_optimization:
+            # The target is the current state of our *learned* global prototypes
+            alignment_target = trainable_global_prototypes.weight.detach().clone()
+        else:
+            # The target is the static, ideal ETF anchor (as in V7)
+            alignment_target = etf_anchors
         
         local_protos = []
         
@@ -905,7 +997,7 @@ def OneshotOursV9(trainset, test_loader, client_idx_map, config, device, server_
                 clients_sample_per_class.append(generate_sample_per_class(config['dataset']['num_classes'], client_dataloader, len(client_idx_map[c])))
 
             if use_adaptive_lambda:
-                current_lambda = calculate_adaptive_lambda(client_dataloader, config['dataset']['num_classes'], lambda_min, lambda_max, device)
+                current_lambda = calculate_adaptive_lambda(client_dataloader, config['dataset']['num_classes'], v9_cfg['lambda_min'], v9_cfg['lambda_max'], device)
             else:
                 current_lambda = config.get('lambda_align_initial', 5.0) 
 
@@ -928,22 +1020,36 @@ def OneshotOursV9(trainset, test_loader, client_idx_map, config, device, server_
                 total_rounds=total_rounds,
                 save_freq=config['checkpoint']['save_freq'],
                 use_drcl=True,
-                fixed_anchors=fixed_anchors,
+                fixed_anchors=alignment_target,
                 lambda_align=current_lambda
             )
             
             local_models[c] = local_model_c
             logger.info(f"Client {c} Finish Local Training--------|")
 
-            local_proto_c = local_model_c.get_proto().detach()
-            local_protos.append(local_proto_c)
+            local_protos.append(local_model_c.get_proto().detach())
             logger.info(f"Client {c} Collecting Local Prototypes--------|")
 
         logger.info(f"Round {cr} Finish--------|")
         model_var_m, model_var_s = compute_local_model_variance(local_models)
         logger.info(f"Model variance: mean: {model_var_m}, sum: {model_var_s}")
 
-        global_proto = aggregate_local_protos(local_protos)
+        if use_server_optimization:
+            trainable_global_prototypes = optimize_global_prototypes_on_server(
+                local_protos,
+                trainable_global_prototypes,
+                etf_anchors, # Pass ideal ETF for regularization
+                v9_cfg.get('server_lr', 0.001),
+                v9_cfg.get('server_epochs', 20),
+                v9_cfg.get('gamma_etf_reg', 0.1),
+                device
+            )
+            # After learning, the final global proto for evaluation is the learned one
+            global_proto = trainable_global_prototypes.weight.detach().clone()
+        else:
+            # If Plan B is off, aggregate protos the old way (simple average)
+            global_proto = aggregate_local_protos(local_protos)
+
         
         if server_strategy == 'true_simple_output':
             method_name = 'OursV9+TrueSimpleOutputServer'
