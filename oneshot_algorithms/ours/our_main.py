@@ -717,7 +717,7 @@ def OneshotOursV6(trainset, test_loader, client_idx_map, config, device, use_sim
         save_yaml_config(save_path + "/baselines_" + method_name +"_" + config['checkpoint']['result_file'], method_results)
 
 # OneshotOursV7 (ETF Anchors + Lambda Annealing)
-def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, server_strategy='simple_feature'):
+def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, server_strategy='simple_feature',lambda_val=0):
     logger.info('OneshotOursV7 with DRCL (ETF Anchors) and Lambda Annealing')
     
     global_model = get_train_models(
@@ -765,6 +765,14 @@ def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, server_
             if cr == 0:
                 clients_sample_per_class.append(generate_sample_per_class(config['dataset']['num_classes'], client_dataloader, len(client_idx_map[c])))
 
+            if (lambda_val > 0):
+                lambda_align_initial = lambda_val
+                
+            else:
+                lambda_align_initial = config.get('lambda_align_initial', 5.0)
+
+            logger.info(f"Using provided lambda_align_initial: {lambda_align_initial}")
+
             # 调用与V6完全相同的本地训练函数，但传入的是高质量的ETF锚点
             local_model_c = ours_local_training(
                 model=copy.deepcopy(local_models[c]),
@@ -785,7 +793,7 @@ def OneshotOursV7(trainset, test_loader, client_idx_map, config, device, server_
                 save_freq=config['checkpoint']['save_freq'],
                 use_drcl=True,
                 fixed_anchors=fixed_anchors,
-                lambda_align=config.get('lambda_align_initial', 5.0)
+                lambda_align=lambda_align_initial
             )
             
             local_models[c] = local_model_c

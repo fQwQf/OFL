@@ -64,7 +64,7 @@ elif config_args.algo == 'OursV5':
 elif config_args.algo == 'OursV6':
     OneshotOursV6(trainset, test_loader, client_idx_map, config, device)
 elif config_args.algo == 'OursV7':
-    OneshotOursV7(trainset, test_loader, client_idx_map, config, device)
+    OneshotOursV7(trainset, test_loader, client_idx_map, config, device, lambda_val=config_args.lambdaval)
 elif config_args.algo == 'OursV8':
     OneshotOursV8(trainset, test_loader, client_idx_map, config, device)
 elif config_args.algo == 'OursV9':
